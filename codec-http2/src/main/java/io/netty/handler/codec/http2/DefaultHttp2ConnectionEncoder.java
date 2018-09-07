@@ -27,6 +27,7 @@ import java.util.ArrayDeque;
 
 import static io.netty.handler.codec.http.HttpStatusClass.INFORMATIONAL;
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT;
+import static io.netty.handler.codec.http2.Http2Error.NO_ERROR;
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
 import static io.netty.handler.codec.http2.Http2Exception.connectionError;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -204,6 +205,11 @@ public class DefaultHttp2ConnectionEncoder implements Http2ConnectionEncoder {
 
                 ChannelFuture future = frameWriter.writeHeaders(ctx, streamId, headers, streamDependency,
                                                                 weight, exclusive, padding, endOfStream, promise);
+                // Send RST_STREAM(NO_ERROR) after trailers if client is not half closed, so client doesn't need to
+                // interact with server anymore since server expressed that it is done.
+                if (endOfStream && connection.isServer() && stream.state().remoteSideOpen()) {
+                    frameWriter.writeRstStream(ctx, streamId, NO_ERROR.code(), promise);
+                }
                 // Writing headers may fail during the encode state if they violate HPACK limits.
                 Throwable failureCause = future.cause();
                 if (failureCause == null) {

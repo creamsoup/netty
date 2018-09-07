@@ -34,6 +34,7 @@ import junit.framework.AssertionFailedError;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
@@ -45,8 +46,11 @@ import java.util.List;
 import static io.netty.buffer.Unpooled.EMPTY_BUFFER;
 import static io.netty.buffer.Unpooled.wrappedBuffer;
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT;
+import static io.netty.handler.codec.http2.Http2Error.NO_ERROR;
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
+import static io.netty.handler.codec.http2.Http2Error.STREAM_CLOSED;
 import static io.netty.handler.codec.http2.Http2Stream.State.HALF_CLOSED_REMOTE;
+import static io.netty.handler.codec.http2.Http2Stream.State.OPEN;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_LOCAL;
 import static io.netty.handler.codec.http2.Http2TestUtil.newVoidPromise;
 import static io.netty.util.CharsetUtil.UTF_8;
@@ -57,6 +61,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyInt;
@@ -65,6 +70,7 @@ import static org.mockito.Mockito.anyShort;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -693,6 +699,34 @@ public class DefaultHttp2ConnectionEncoderTest {
 
         assertTrue(promise.isSuccess());
         verify(lifecycleManager).closeStreamLocal(eq(stream(STREAM_ID)), eq(promise));
+    }
+
+    @Test
+    public void trailerWriteShouldSendResetStreamIfRemoteIsOpen() throws Exception {
+        writeAllFlowControlledFrames();
+        createStream(STREAM_ID, false);
+        ChannelPromise promise = newPromise();
+
+        encoder.writeData(ctx, STREAM_ID, dummyData().retain(), 0, false, newPromise());
+        encoder.writeHeaders(ctx, STREAM_ID, EmptyHttp2Headers.INSTANCE, 0, true, promise);
+
+        InOrder inOrder = inOrder(writer);
+        inOrder.verify(writer).writeHeaders(eq(ctx), eq(STREAM_ID), eq(EmptyHttp2Headers.INSTANCE), eq(0), anyShort(),
+            eq(false), anyInt(), eq(true), eq(promise));
+        inOrder.verify(writer).writeRstStream(ctx, STREAM_ID, NO_ERROR.code(), promise);
+    }
+
+    @Test
+    public void trailerWriteShouldNotSendResetStreamIfRemoteIsHalfClosed() throws Exception {
+        writeAllFlowControlledFrames();
+        Http2Stream stream = createStream(STREAM_ID, false);
+        ChannelPromise promise = newPromise();
+
+        encoder.writeData(ctx, STREAM_ID, dummyData().retain(), 0, false, newPromise());
+        stream.closeRemoteSide();
+        encoder.writeHeaders(ctx, STREAM_ID, EmptyHttp2Headers.INSTANCE, 0, true, promise);
+
+        verify(writer, never()).writeRstStream(eq(ctx), eq(STREAM_ID), anyLong(), any(ChannelPromise.class));
     }
 
     @Test
